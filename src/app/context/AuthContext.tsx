@@ -9,119 +9,113 @@ type AuthContextType = {
     username: string | null;
     windowHeight: number;
     isDataValid: boolean;
-    error: string | null;
-    isInitialized: boolean;
+    isLoading: boolean;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// Initial state that matches SSR output
+const initialState = {
+    userID: null,
+    username: null,
+    windowHeight: 0,
+    isDataValid: false,
+    isLoading: true
+};
 
 export const AuthContextProvider = ({
     children,
 }: {
     children: React.ReactNode;
 }) => {
-    const [isClient, setIsClient] = useState(false);
-    const [windowHeight, setWindowHeight] = useState<number>(0);
-    const [userID, setUserID] = useState<number | null>(null);
-    const [username, setUsername] = useState<string | null>(null);
-    const [isDataValid, setIsDataValid] = useState<boolean>(false);
-    const [error, setError] = useState<string | null>(null);
+    // Initialize with SSR-safe values
+    const [state, setState] = useState<AuthContextType>(initialState);
     const [isInitialized, setIsInitialized] = useState(false);
 
     useEffect(() => {
-        setIsClient(true);
-    }, []);
+        // Skip initialization if already done
+        if (isInitialized) return;
 
-    useEffect(() => {
-        if (!isClient) return;
+        let isMounted = true;
 
-        // Check if WebApp is available
-        if (typeof WebApp === 'undefined') {
-            setError('Telegram WebApp is not available. Are you running this outside of Telegram?');
-            setIsInitialized(true);
-            return;
-        }
-
-        let initializationTimeout: NodeJS.Timeout;
-
-        const initializeWebApp = async () => {
+        const initializeTelegramWebApp = async () => {
             try {
-                // Disable vertical swipes
+                // Check if we're in Telegram WebApp environment
+                if (typeof WebApp === 'undefined') {
+                    console.error('Telegram WebApp is not available');
+                    return;
+                }
+
+                // Initialize WebApp
                 WebApp.isVerticalSwipesEnabled = false;
                 
-                // Set viewport height
-                setWindowHeight(WebApp.viewportStableHeight || window.innerHeight);
+                // Use a promise to ensure WebApp.ready() completes
+                await new Promise<void>((resolve) => {
+                    WebApp.ready();
+                    // Give a small delay for WebApp to fully initialize
+                    setTimeout(resolve, 100);
+                });
 
-                // Wait for WebApp to be ready
-                WebApp.ready();
+                if (!isMounted) return;
 
-                // Set initialization timeout
-                initializationTimeout = setTimeout(() => {
-                    if (!WebApp.initData) {
-                        setError('Initialization timeout: initData not received from Telegram');
-                        setIsInitialized(true);
+                // Update height after WebApp is ready
+                const height = WebApp.viewportStableHeight || window.innerHeight;
+
+                // Validate Telegram data
+                try {
+                    const botId = 7638029485;
+                    await validate3rd(WebApp.initData, botId);
+                    
+                    const user = WebApp.initDataUnsafe.user;
+                    
+                    if (isMounted) {
+                        setState({
+                            userID: user?.id || null,
+                            username: user?.username || null,
+                            windowHeight: height,
+                            isDataValid: true,
+                            isLoading: false
+                        });
                     }
-                }, 5000); // 5 second timeout
-
-                // Validate initialization data
-                const botId = 7638029485;
-                
-                if (!WebApp.initData) {
-                    throw new Error('Telegram WebApp initialization data is not available');
+                } catch (error) {
+                    console.error('Telegram validation failed:', error);
+                    if (isMounted) {
+                        setState(prev => ({
+                            ...prev,
+                            isDataValid: false,
+                            isLoading: false,
+                            windowHeight: height
+                        }));
+                    }
                 }
-
-                // Clear timeout as we got the initData
-                clearTimeout(initializationTimeout);
-
-                // Validate the initialization data
-                await validate3rd(WebApp.initData, botId);
-                
-                // Extract user data if available
-                const user = WebApp.initDataUnsafe.user;
-                if (!user) {
-                    throw new Error('User data is not available in initialization data');
-                }
-
-                // Set user data
-                setUserID(user.id);
-                setUsername(user.username || null);
-                setIsDataValid(true);
-                setError(null);
-
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-                setError(errorMessage);
-                setIsDataValid(false);
-                console.error('Telegram WebApp initialization failed:', errorMessage);
-            } finally {
-                setIsInitialized(true);
+                console.error('Failed to initialize Telegram WebApp:', error);
+                if (isMounted) {
+                    setState(prev => ({
+                        ...prev,
+                        isLoading: false
+                    }));
+                }
             }
         };
 
-        initializeWebApp();
+        // Delay initialization slightly to avoid hydration issues
+        const timer = setTimeout(() => {
+            initializeTelegramWebApp();
+            setIsInitialized(true);
+        }, 0);
 
-        // Cleanup
         return () => {
-            if (initializationTimeout) {
-                clearTimeout(initializationTimeout);
-            }
+            isMounted = false;
+            clearTimeout(timer);
         };
-    }, [isClient]);
+    }, [isInitialized]);
 
-    const contextValue = {
-        userID,
-        username,
-        windowHeight,
-        isDataValid,
-        error,
-        isInitialized
-    };
-
-    if (!isClient) {
-        return null;
-    }
-
-    return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;
+    return (
+        <AuthContext.Provider value={state}>
+            {children}
+        </AuthContext.Provider>
+    );
 };
 
 export const useAuth = () => {
