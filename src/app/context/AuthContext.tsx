@@ -1,8 +1,8 @@
+// app/context/AuthContext.tsx
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import WebApp from '@twa-dev/sdk';
-import { validate3rd } from '@telegram-apps/init-data-node/web';
+import type WebAppType from '@twa-dev/sdk';
 
 type AuthContextType = {
     userID: number | null;
@@ -14,8 +14,7 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Initial state that matches SSR output
-const initialState = {
+const initialState: AuthContextType = {
     userID: null,
     username: null,
     windowHeight: 0,
@@ -28,88 +27,80 @@ export const AuthContextProvider = ({
 }: {
     children: React.ReactNode;
 }) => {
-    // Initialize with SSR-safe values
     const [state, setState] = useState<AuthContextType>(initialState);
-    const [isInitialized, setIsInitialized] = useState(false);
 
     useEffect(() => {
-        // Skip initialization if already done
-        if (isInitialized) return;
+        let mounted = true;
 
-        let isMounted = true;
-
-        const initializeTelegramWebApp = async () => {
+        const initTelegram = async () => {
             try {
-                // Check if we're in Telegram WebApp environment
-                if (typeof WebApp === 'undefined') {
-                    console.error('Telegram WebApp is not available');
-                    return;
-                }
+                // Dynamically import WebApp and validation function
+                const [{ default: WebApp }, { validate3rd }] = await Promise.all([
+                    import('@twa-dev/sdk'),
+                    import('@telegram-apps/init-data-node/web')
+                ]);
+
+                if (!mounted) return;
 
                 // Initialize WebApp
-                WebApp.isVerticalSwipesEnabled = false;
-                
-                // Use a promise to ensure WebApp.ready() completes
-                await new Promise<void>((resolve) => {
+                if (WebApp) {
+                    WebApp.isVerticalSwipesEnabled = false;
+                    const height = WebApp.viewportStableHeight || (typeof window !== 'undefined' ? window.innerHeight : 0);
+                    
                     WebApp.ready();
-                    // Give a small delay for WebApp to fully initialize
-                    setTimeout(resolve, 100);
-                });
 
-                if (!isMounted) return;
+                    try {
+                        const botId = 7638029485;
+                        if (WebApp.initData) {
+                            await validate3rd(WebApp.initData, botId);
+                            const user = WebApp.initDataUnsafe.user;
 
-                // Update height after WebApp is ready
-                const height = WebApp.viewportStableHeight || window.innerHeight;
-
-                // Validate Telegram data
-                try {
-                    const botId = 7638029485;
-                    await validate3rd(WebApp.initData, botId);
-                    
-                    const user = WebApp.initDataUnsafe.user;
-                    
-                    if (isMounted) {
-                        setState({
-                            userID: user?.id || null,
-                            username: user?.username || null,
-                            windowHeight: height,
-                            isDataValid: true,
-                            isLoading: false
-                        });
-                    }
-                } catch (error) {
-                    console.error('Telegram validation failed:', error);
-                    if (isMounted) {
-                        setState(prev => ({
-                            ...prev,
-                            isDataValid: false,
-                            isLoading: false,
-                            windowHeight: height
-                        }));
+                            if (mounted) {
+                                setState({
+                                    userID: user?.id || null,
+                                    username: user?.username || null,
+                                    windowHeight: height,
+                                    isDataValid: true,
+                                    isLoading: false
+                                });
+                            }
+                        } else {
+                            throw new Error('No initData available');
+                        }
+                    } catch (error) {
+                        console.error('Telegram validation failed:', error);
+                        if (mounted) {
+                            setState(prev => ({
+                                ...prev,
+                                isDataValid: false,
+                                isLoading: false
+                            }));
+                        }
                     }
                 }
             } catch (error) {
-                console.error('Failed to initialize Telegram WebApp:', error);
-                if (isMounted) {
+                console.error('Failed to initialize Telegram:', error);
+                if (mounted) {
                     setState(prev => ({
                         ...prev,
-                        isLoading: false
+                        isLoading: false,
+                        isDataValid: false
                     }));
                 }
             }
         };
 
-        // Delay initialization slightly to avoid hydration issues
-        const timer = setTimeout(() => {
-            initializeTelegramWebApp();
-            setIsInitialized(true);
-        }, 0);
+        // Only run on client side
+        if (typeof window !== 'undefined') {
+            initTelegram();
+        } else {
+            setState(prev => ({ ...prev, isLoading: false }));
+        }
 
         return () => {
-            isMounted = false;
-            clearTimeout(timer);
+            mounted = false;
         };
-    }, [isInitialized]);
+    }, []);
 
     return (
         <AuthContext.Provider value={state}>

@@ -1,7 +1,7 @@
 // app/layout.tsx
 import type { Metadata } from "next";
 import { AuthContextProvider } from "./context/AuthContext";
-import { TelegramViewportHandler } from "./components/TelegramViewportHandler";
+import { TelegramViewport } from "./components/TelegramViewport";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,9 +18,9 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <AuthContextProvider>
-          <TelegramViewportHandler>
+          <TelegramViewport>
             {children}
-          </TelegramViewportHandler>
+          </TelegramViewport>
         </AuthContextProvider>
       </body>
     </html>
